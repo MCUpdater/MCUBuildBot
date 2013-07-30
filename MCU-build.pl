@@ -57,7 +57,7 @@ my $updateBuild = $dbh->prepare('REPLACE INTO Builds(branch, gitcommit, buildnum
 my $getLastBuild = $dbh->prepare('SELECT gitcommit, buildnumber FROM Builds where branch = ?');
 
 my $topic = "";
-
+my $channel = $cfg->val('IRC','Channel');
 my ($irc) = POE::Component::IRC->spawn();
 
 POE::Session->create(
@@ -89,11 +89,11 @@ sub bot_start {
 
 	$irc->plugin_add( 'NickServID', POE::Component::IRC::Plugin::NickServID->new( Password => $cfg->val("IRC","NickServPass") ));
 	$kernel->delay(git_poll => 10);
-	$irc->yield(topic => "#MCUpdater");
+	$irc->yield(topic => $channel);
 }
 
 sub on_connect {
-	$irc->yield(join => $cfg->val("IRC","Channel"));
+	$irc->yield(join => $channel);
 	return;
 }
 
@@ -119,7 +119,7 @@ sub on_topicResponse {
 sub on_public {
 	my ($kernel, $who, $where, $msg) = @_[KERNEL, ARG0, ARG1, ARG2];
 	my $nick = (split /!/, $who)[0];
-	my $channel = $where->[0];
+	my $chan = $where->[0];
 	my $isOp = 0;
 	foreach (@ops) {
 		if ( $nick eq $_ ) { $isOp = 1; }
@@ -134,7 +134,7 @@ sub on_public {
 				} else {
 					my ($branch, $force, $overrideNum) = @cmdargs[0, 1, 2];
 					if (none { /$branch/ } @branches) {
-						$irc->yield(privmsg => $channel, "Branch $branch is not configured for build.");
+						$irc->yield(privmsg => $chan, "Branch $branch is not configured for build.");
 						return;
 					}
 					my $noChange = 0;
@@ -150,12 +150,12 @@ sub on_public {
 						$noChange = 1;
 					}
 					if ($noChange == 1 && $force ne "force") {
-						$irc->yield(privmsg => $channel, "No changes to be built on branch $branch.");
+						$irc->yield(privmsg => $chan, "No changes to be built on branch $branch.");
 						return;
 					} else {
-						$irc->yield(privmsg => $channel, "Beginning build on branch $branch.");
+						$irc->yield(privmsg => $chan, "Beginning build on branch $branch.");
 					}
-					&DoBuild($channel, $branch, $force, $overrideNum);
+					&DoBuild($chan, $branch, $force, $overrideNum);
 				}
 			}
 			case /\!l(c$|astcommit$)/ {
@@ -163,20 +163,20 @@ sub on_public {
 				if (@localbranches == 0) { @localbranches = @branches; }
 				foreach my $branch (@localbranches) {
 					if (none { /$branch/ } @branches) {
-						$irc->yield(privmsg => $channel, "Branch $branch is not configured.");
+						$irc->yield(privmsg => $chan, "Branch $branch is not configured.");
 					} else {
 						chdir("$basedir$branch/MCUpdater");
 						my $response = `git log -1 --format="format:%H~~~~~%cn~~~~~%s"`;
 						my ($commit, $author, $title) = split('~~~~~',$response);
-						$irc->yield(privmsg => $channel, "Last commit on branch $branch:");
-						$irc->yield(privmsg => $channel, &ShortenCommit($commit) . " <$author> $title");
+						$irc->yield(privmsg => $chan, "Last commit on branch $branch:");
+						$irc->yield(privmsg => $chan, &ShortenCommit($commit) . " <$author> $title");
 					}
 				}
 			}
 			case /\!c($|ommits$)/ {
 				my $branch = $cmdargs[0];
 				if (none { /$branch/ } @branches) {
-					$irc->yield(privmsg => $channel, "Branch $branch is not configured.");
+					$irc->yield(privmsg => $chan, "Branch $branch is not configured.");
 					return;
 				}
 				my $count = $cmdargs[1];
@@ -187,13 +187,13 @@ sub on_public {
 					open(GIT, qq{git log -$count --format="format:%H~~~~~%cn~~~~~%s" |});
 					my @lines = <GIT>;
 					close(GIT);
-					$irc->yield(privmsg => $channel, "Last $count commit(s) on branch $branch:");
+					$irc->yield(privmsg => $chan, "Last $count commit(s) on branch $branch:");
 					foreach my $line (@lines) {
 						my ($commit, $author, $title) = split('~~~~~',$line);
-						$irc->yield(privmsg => $channel, &ShortenCommit($commit) . " <$author> $title");
+						$irc->yield(privmsg => $chan, &ShortenCommit($commit) . " <$author> $title");
 					}
 				} else {
-					$irc->yield(privmsg => $channel, "$count is not a number.");
+					$irc->yield(privmsg => $chan, "$count is not a number.");
 				}
 			}
 		}
@@ -232,7 +232,6 @@ sub Poll {
 
 sub CheckBranch {
 	my $branch = $_[0];
-	my $channel = "#MCUpdater";
 	my $noChange = 1;
 	chdir("$basedir$branch/MCUpdater");
 	open(PULL, 'git pull origin |');
@@ -256,7 +255,7 @@ sub CheckBranch {
 }
 
 sub DoBuild {
-	my ($channel, $branch, $force, $overrideNum) = @_[0,1,2,3];
+	my ($chan, $branch, $force, $overrideNum) = @_[0,1,2,3];
 	$getLastBuild->execute($branch);
 	my $result = $getLastBuild->fetch;
 	my $buildNum = 1;
@@ -268,7 +267,7 @@ sub DoBuild {
 	}
 	if (defined $overrideNum) { $buildNum = $overrideNum; }
 	my $newCommit = `git log -1 --format=format:%H`;
-	$irc->yield(privmsg => $channel, "Newest commit on branch $branch: $newCommit");
+	$irc->yield(privmsg => $chan, "Newest commit on branch $branch: $newCommit");
 	my $logcmd;
 	if ($commit eq "") {
 		$logcmd = qq{git log -5 --format="format:%H~~~~~%cn~~~~~%s" |};
@@ -281,7 +280,7 @@ sub DoBuild {
 	close(CHANGES);
 	foreach my $change (@changes) {
 		my ($commit, $author, $title) = split('~~~~~',$change);
-		$irc->yield(privmsg => $channel, &ShortenCommit($commit) . " <$author> $title");
+		$irc->yield(privmsg => $chan, &ShortenCommit($commit) . " <$author> $title");
 	}
 	$ENV{BUILD_NUMBER}=$buildNum;
 	$ENV{GIT_BRANCH}=$branch;
@@ -298,10 +297,10 @@ sub DoBuild {
 		print BUILD qq{Build ($branch $buildNum) successful=$success ($exit)\n$combined\n};
 		close(BUILD);
 		if ($success) {
-			$irc->yield(privmsg => $channel, $GREEN . "Build $buildNum successful on branch $branch" . $NORMAL);
+			$irc->yield(privmsg => $chan, $GREEN . "Build $buildNum successful on branch $branch" . $NORMAL);
 			$updateBuild->execute($branch, $newCommit, $buildNum);
 			my $sftp = Net::SFTP::Foreign->new('northumberland.dreamhost.com', user => 'mcujenkins', key_path => "$botdir/id_mcujenkins", ssh_cmd => '/usr/bin/ssh');
-			$sftp->error and $irc->yield(privmsg => $channel, "Unable to establish SFTP connection: " . $sftp->error);
+			$sftp->error and $irc->yield(privmsg => $chan, "Unable to establish SFTP connection: " . $sftp->error);
 			my @files = glob "dist/*";
 			foreach my $file (@files) {
 				open FILE, $file;
@@ -330,14 +329,14 @@ sub DoBuild {
 						}
 					}
 					$topic = join(' | ', @elements);
-					$irc->yield(topic => $channel, $topic);
+					$irc->yield(topic => $chan, $topic);
 				}
 			}
 		} else {
-			$irc->yield(privmsg => $channel, $RED . "ServerUtility build failed on branch $branch" . $NORMAL);
+			$irc->yield(privmsg => $chan, $RED . "ServerUtility build failed on branch $branch" . $NORMAL);
 		}
 	} else {
-		$irc->yield(privmsg => $channel, $RED . "Client build failed on branch $branch" . $NORMAL);
+		$irc->yield(privmsg => $chan, $RED . "Client build failed on branch $branch" . $NORMAL);
 	}
 	return;
 }
